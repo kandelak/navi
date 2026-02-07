@@ -100,6 +100,7 @@ Each of the `annotations.json` contains the following information.
 ## Download the dataset.
 
 ```bash
+
 # Download (v1.5) 
 wget https://storage.googleapis.com/gresearch/navi-dataset/navi_v1.5.tar.gz
 
@@ -107,8 +108,11 @@ wget https://storage.googleapis.com/gresearch/navi-dataset/navi_v1.5.tar.gz
 # v1.0 
 # wget https://storage.googleapis.com/gresearch/navi-dataset/navi_v1.0.tar.gz
 
+# Change version if you downloaded previous ones
+VERSION=v1.5
+
 # Extract
-tar -xzf navi_v1.tar.gz
+tar -xzf navi_${VERSION}.tar.gz
 ```
 
 ## Clone the code and use the dataset.
