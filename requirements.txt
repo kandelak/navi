@@ -13,3 +13,6 @@ matplotlib
 numpy
 colour
 mediapy
+ipykernel
+
+tqdm

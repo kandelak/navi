@@ -26,7 +26,9 @@ from PIL import ImageOps
 
 import mesh_util
 import transformations
-from navi_utils import project_and_filter_sample_coordinates
+import torch as t
+from gl import scene_renderer
+from gl import camera_util
 
 
 def read_image(image_path: Text) -> Image.Image:
@@ -224,13 +226,13 @@ def load_pair_data_for_scene(
 Pixel = tuple[int, int]
 VisibleSamples = dict[int, Pixel]
 VisiblePair = tuple[VisibleSamples, VisibleSamples]
-
+IntersectedVisiblePair = dict[int, tuple[Pixel, Pixel]]
 
 def sample_and_project_on_image_pair(
         *,
         triangles: np.ndarray,
-        annotations: Tuple[dict, dict],
-        images: Tuple[np.ndarray, np.ndarray],
+        annotations: tuple[dict, dict],
+        images: tuple[np.ndarray, np.ndarray],
         num_samples: int = 100,
 ) -> VisiblePair:
     """Samples 3D points on a mesh and projects them into a pair of images, keeping only visible points.
@@ -292,11 +294,99 @@ def sample_and_project_on_image_pair(
     )
 
     # 2) Project/filter for each of the two views.
-    samples_visible_1 = project_and_filter_sample_coordinates(
+    samples_visible_1 = _project_and_filter_sample_coordinates(
         triangles, annotations[0], sampled_points, images[0]
     )
-    samples_visible_2 = project_and_filter_sample_coordinates(
+    samples_visible_2 = _project_and_filter_sample_coordinates(
         triangles, annotations[1], sampled_points, images[1]
     )
 
     return samples_visible_1, samples_visible_2
+
+
+
+def _project_and_filter_sample_coordinates(
+    mesh_triangles: t.tensor, annotation, sampled_points: t.tensor,
+    image: Image.Image) -> dict[int, tuple[int, int]]:
+  """Returns the sampled points, projected on the image, that are visible from the current view."""
+
+  object_to_world, intrinsics = camera_matrices_from_annotation(annotation)
+
+  # Render the 3D model alignment.
+  mesh_triangles_aligned = transformations.transform_mesh(
+      mesh_triangles, object_to_world)
+  rend = scene_renderer.render_scene(
+      mesh_triangles_aligned, view_projection_matrix=intrinsics,
+      output_type=t.float32, clear_color=(0,0,0,0),
+      image_size=image.size[::-1], cull_back_facing=False, return_rgb=False)
+  depth = rend[:, :, 3].numpy()
+
+  # Align the sampled points.
+  sampled_points_world = transformations.transform_points(
+      sampled_points, object_to_world)
+  sampled_points_screen = transformations.transform_points(
+      sampled_points_world, intrinsics)
+
+  # Convert from OpenGL space to image space.
+  sampled_points_screen += t.tensor([1., 1., 0])
+  sampled_points_screen *= t.tensor([image.size[0]/2, image.size[1]/2, 1])
+  samples = t.concat(
+      (sampled_points_screen[:, :2], sampled_points_world[:, 2:3]),
+      dim=1).numpy()
+
+  # Discard points where the depth doesn't match the OpenGL depth buffer.
+  coords = {}
+  for i_sample, sample in enumerate(samples):
+    y = round(sample[1])
+    x = round(sample[0])
+    z = sample[2]
+    if abs(depth[y, x] - z) < 1:
+      coords[i_sample] = (x, y)
+  return coords
+
+
+def intersect_visible_samples(
+    samples_visible_pair: VisiblePair,
+) -> IntersectedVisiblePair:
+    """Computes the intersection of visible 3D samples across two views.
+
+    This function finds the set of 3D sample indices that are visible in
+    *both* images of a pair and returns their corresponding 2D projections
+    in each image.
+
+    Args:
+        samples_visible_pair: A tuple `(samples_visible_1, samples_visible_2)`
+            where each element is a dictionary mapping:
+              - key: `int` index of a sampled 3D point
+              - value: `(x, y)` pixel coordinates where that 3D point projects
+                in the corresponding image.
+
+    Returns:
+        intersected_samples: A dictionary mapping:
+          - key: `int` sample index that is visible in *both* images
+          - value: `((x1, y1), (x2, y2))`, where:
+              - `(x1, y1)` is the pixel location in the first image
+              - `(x2, y2)` is the pixel location in the second image
+
+        Return type:
+            Dict[int, Tuple[Tuple[int, int], Tuple[int, int]]]
+
+        Semantics:
+          - Only sample indices present in *both* input dictionaries
+            are included.
+          - The ordering of keys is not guaranteed.
+          - If a sample index is missing from either view, it is excluded.
+
+    """
+    samples_visible_1, samples_visible_2 = samples_visible_pair
+
+    common_sample_indices = (
+        samples_visible_1.keys() & samples_visible_2.keys()
+    )
+
+    intersected_samples: IntersectedVisiblePair = {
+        idx: (samples_visible_1[idx], samples_visible_2[idx])
+        for idx in common_sample_indices
+    }
+
+    return intersected_samples
