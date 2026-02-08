@@ -23,7 +23,10 @@ import mediapy as media
 import numpy as np
 from PIL import Image
 from PIL import ImageOps
+
+import mesh_util
 import transformations
+from navi_utils import project_and_filter_sample_coordinates
 
 
 def read_image(image_path: Text) -> Image.Image:
@@ -137,9 +140,9 @@ import trimesh
 
 
 def load_pair_data_for_scene(
-    query: str,
-    navi_release_root: str,
-    image_pair: Tuple[str, str],
+        query: str,
+        navi_release_root: str,
+        image_pair: Tuple[str, str],
 ):
     """Loads filtered annotations, 3D mesh, and a specific pair of images for a scene.
 
@@ -216,3 +219,84 @@ def load_pair_data_for_scene(
 
     return filtered_annotations, mesh, images
 
+
+# Type aliases for readability.
+Pixel = tuple[int, int]
+VisibleSamples = dict[int, Pixel]
+VisiblePair = tuple[VisibleSamples, VisibleSamples]
+
+
+def sample_and_project_on_image_pair(
+        *,
+        triangles: np.ndarray,
+        annotations: Tuple[dict, dict],
+        images: Tuple[np.ndarray, np.ndarray],
+        num_samples: int = 100,
+) -> VisiblePair:
+    """Samples 3D points on a mesh and projects them into a pair of images, keeping only visible points.
+
+    The function:
+      1) Samples `num_samples` 3D points on the mesh surface defined by `triangles`.
+      2) For each of the two views (annotation + image), projects the sampled 3D points into the
+         2D pixel grid and filters out points that are not visible (e.g., outside the image,
+         occluded, or failing any validity checks implemented by `project_and_filter_sample_coordinates`).
+
+    Notes:
+      - This function assumes `mesh_util.sample_points_from_mesh` returns sampled points in a stable
+        order and that `project_and_filter_sample_coordinates` returns a dictionary mapping
+        sample indices -> (x, y) pixel coordinates.
+
+    Args:
+        triangles: Mesh triangles used for sampling and projection. Expected to be compatible with
+            `mesh_util.sample_points_from_mesh` and `project_and_filter_sample_coordinates`.
+            Commonly this is an array shaped (T, 3, 3) containing triangle vertex coordinates.
+        annotations: A tuple of exactly two annotation dicts (one per image). Each annotation must
+            contain the camera parameters expected by `project_and_filter_sample_coordinates`.
+        images: A tuple of exactly two images (one per view), aligned with `annotations`.
+            Each image is typically a numpy array shaped (H, W, C) or (H, W).
+        num_samples: Number of 3D surface samples to draw from the mesh.
+
+    Returns:
+        samples_visible: A pair of dictionaries `(samples_visible_1, samples_visible_2)`.
+
+            Each dictionary maps:
+              - key: `int` sample index in `[0, num_samples - 1]`, referring to the position of the
+                corresponding 3D point in the internally sampled array returned by
+                `mesh_util.sample_points_from_mesh`.
+              - value: `Tuple[int, int]` pixel coordinate `(x, y)` on the *dense* 2D image grid where
+                that 3D sample projects and is considered visible.
+
+            If a sample index is **absent** from a dictionary, that means the corresponding 3D point
+            was *not* visible in that view (e.g., projected outside bounds, occluded, invalid depth, etc.).
+
+            Concretely:
+              - `samples_visible[0]` contains visibility + 2D locations for the first image.
+              - `samples_visible[1]` contains visibility + 2D locations for the second image.
+
+            Return type:
+              Tuple[
+                Dict[int, Tuple[int, int]],
+                Dict[int, Tuple[int, int]]
+              ]
+
+    """
+    if len(annotations) != 2 or len(images) != 2:
+        raise ValueError(
+            "annotations and images must both be tuples of length 2 "
+            "(one per view in the pair)."
+        )
+
+    # 1) Sample the mesh surface.
+    sampled_points, _ = mesh_util.sample_points_from_mesh(
+        triangles, num_sample_points=num_samples
+    )
+
+    # 2) Project/filter for each of the two views.
+    samples_visible_1 = project_and_filter_sample_coordinates(
+        triangles, annotations[0], sampled_points, images[0]
+    )
+    samples_visible_2 = project_and_filter_sample_coordinates(
+        triangles, annotations[1], sampled_points, images[1]
+    )
+
+    return samples_visible_1, samples_visible_2
