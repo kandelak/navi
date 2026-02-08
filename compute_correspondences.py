@@ -16,6 +16,7 @@ def compute_correspondences_for_image_pairs(
     num_samples_per_scene: int,
     output_path: str,
     random_subsample_size: Optional[int] = None,
+    range_indices: Optional[Tuple[int, int]] = None,
     seed: int = 0,
 ) -> None:
     """Computes 2D-2D correspondences for image pairs listed in a text file and writes them to JSON.
@@ -44,6 +45,10 @@ def compute_correspondences_for_image_pairs(
         output_path: Path to the output .json file.
         random_subsample_size: If provided, randomly samples this many rows from the txt file
             before processing.
+        range_indices: Optional (start_idx, end_idx) inclusive range of rows (0-based, after
+            filtering comments/blanks) to process. When provided:
+              - `random_subsample_size` must be None (range works on the full table).
+              - Output is written under `output_path/range=<start_idx>_<end_idx>`.
         seed: Random seed used for subsampling.
 
     Output JSON format:
@@ -86,6 +91,20 @@ def compute_correspondences_for_image_pairs(
 
             rows.append((p1, p2, rot))
 
+    # ---- Range selection ----
+    if range_indices is not None and random_subsample_size is not None:
+        raise ValueError("`range_indices` and `random_subsample_size` are mutually exclusive.")
+
+    if range_indices is not None:
+        start_idx, end_idx = range_indices
+        if start_idx < 0 or end_idx < start_idx or end_idx >= len(rows):
+            raise ValueError(
+                f"Invalid range_indices ({start_idx}, {end_idx}) for {len(rows)} rows."
+            )
+        rows = rows[start_idx : end_idx + 1]
+    else:
+        start_idx = end_idx = None
+
     # ---- Optional subsampling ----
     if random_subsample_size is not None and random_subsample_size > 0:
         rng = random.Random(seed)
@@ -115,10 +134,16 @@ def compute_correspondences_for_image_pairs(
     output_records: List[Dict[str, object]] = []
     last_completed_index = -1
 
-    output_dir = os.path.dirname(output_path) or "."
+    final_output_path = (
+        os.path.join(output_path, f"range={start_idx}_{end_idx}")
+        if start_idx is not None and end_idx is not None
+        else output_path
+    )
+    output_dir = os.path.dirname(final_output_path) or "."
     error_file_path = os.path.join(output_dir, "error_file.txt")
 
     try:
+        base_offset = start_idx or 0
         for idx, (view1_path, view2_path, angular_rot) in enumerate(
             tqdm(rows, desc="Processing image pairs")
         ):
@@ -165,12 +190,12 @@ def compute_correspondences_for_image_pairs(
                     "view_2_corresp_y": int(y2),
                 })
 
-            last_completed_index = idx
+            last_completed_index = base_offset + idx
 
     except Exception:
         # Persist partial progress and index of last successful row.
         os.makedirs(output_dir, exist_ok=True)
-        with open(output_path, "w") as f:
+        with open(final_output_path, "w") as f:
             json.dump(output_records, f, indent=2)
         with open(error_file_path, "w") as ef:
             ef.write(str(last_completed_index))
@@ -180,5 +205,5 @@ def compute_correspondences_for_image_pairs(
         os.makedirs(output_dir, exist_ok=True)
         if os.path.exists(error_file_path):
             os.remove(error_file_path)
-        with open(output_path, "w") as f:
+        with open(final_output_path, "w") as f:
             json.dump(output_records, f, indent=2)
