@@ -130,16 +130,21 @@ def load_scene_data(query: str, navi_release_root: str,
     return annotations, mesh, images, video
 
 
-def load_pair_data_for_scene(
-        query: str,
-        navi_release_root: str,
-        image_pair: tuple[str, str],
-):
-    """Loads annotations, 3D mesh, and a specific pair of images for a scene.
+from typing import Tuple, List
+import os
+import json
+import trimesh
 
-    This function is similar to `load_scene_data` but only loads a specified
-    pair of images instead of a variable number of images. The image filenames
-    must exist in the scene annotations.
+
+def load_pair_data_for_scene(
+    query: str,
+    navi_release_root: str,
+    image_pair: Tuple[str, str],
+):
+    """Loads filtered annotations, 3D mesh, and a specific pair of images for a scene.
+
+    This function loads only the annotations and images corresponding to the
+    provided image filename pair. All other annotations in the scene are ignored.
 
     Args:
         query: Scene query string. Supported formats are:
@@ -147,16 +152,18 @@ def load_pair_data_for_scene(
             - "{object_id}-{scene_type}-{scene_idx}-{camera_model}"
             - "{object_id}-{scene_name}" (only for 'wild_set')
         navi_release_root: Root directory of the NAVI release.
-        image_pair: Tuple of two image filenames to load (e.g. ("000.jpg", "001.jpg")).
+        image_pair: Tuple of two image filenames to load
+            (e.g. ("000.jpg", "001.jpg")).
 
     Returns:
-        annotations: List of annotation dictionaries loaded from annotations.json.
+        annotations: List of annotation dictionaries corresponding to image_pair,
+            in the same order as image_pair.
         mesh: Trimesh object of the 3D scan.
-        images: List containing the two loaded images, in the same order as image_pair.
+        images: List containing the loaded images, in the same order as image_pair.
 
     Raises:
-        ValueError: If the query format is invalid or an image filename
-            from image_pair is not found in the annotations.
+        ValueError: If the query format is invalid or if any filename in
+            image_pair is not found in the annotations.
     """
     query_data = query.split('-')
 
@@ -179,7 +186,7 @@ def load_pair_data_for_scene(
         navi_release_root, object_id, scene, 'annotations.json'
     )
     with open(annotation_json_path, 'r') as f:
-        annotations = json.load(f)
+        all_annotations = json.load(f)
 
     # Load the 3D mesh.
     mesh_path = os.path.join(
@@ -187,18 +194,25 @@ def load_pair_data_for_scene(
     )
     mesh = trimesh.load(mesh_path)
 
-    # Build a lookup from filename to annotation.
-    anno_by_filename = {anno['filename']: anno for anno in annotations}
+    # Build a lookup table for fast access.
+    anno_by_filename = {anno['filename']: anno for anno in all_annotations}
 
+    filtered_annotations: List[dict] = []
     images = []
+
     for filename in image_pair:
         if filename not in anno_by_filename:
             raise ValueError(
                 f'Image filename "{filename}" not found in annotations.'
             )
+
+        anno = anno_by_filename[filename]
+        filtered_annotations.append(anno)
+
         image_path = os.path.join(
             navi_release_root, object_id, scene, 'images', filename
         )
         images.append(read_image(image_path))
 
-    return annotations, mesh, images
+    return filtered_annotations, mesh, images
+
