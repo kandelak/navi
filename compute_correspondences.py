@@ -11,13 +11,14 @@ from tqdm import tqdm
 
 
 def compute_correspondences_for_image_pairs(
-    navi_release_root: str,
-    pairs_txt_path: str,
-    num_samples_per_scene: int,
-    output_path: str,
-    random_subsample_size: Optional[int] = None,
-    range_indices: Optional[Tuple[int, int]] = None,
-    seed: int = 0,
+        navi_release_root: str,
+        pairs_txt_path: str,
+        num_samples_per_scene: int,
+        output_path: str,
+        random_subsample_size: Optional[int] = None,
+        range_indices: Optional[Tuple[int, int]] = None,
+        seed: int = 0,
+        max_items_to_store: int = None
 ) -> None:
     """Computes 2D-2D correspondences for image pairs listed in a text file and writes them to JSON.
 
@@ -50,6 +51,7 @@ def compute_correspondences_for_image_pairs(
               - `random_subsample_size` must be None (range works on the full table).
               - Output is written under `output_path/range=<start_idx>_<end_idx>`.
         seed: Random seed used for subsampling.
+        max_items_to_store: Maximum number of items to store in the output file per scene. If None, stores all.
 
     Output JSON format:
         A list of dictionaries, each with the following keys:
@@ -64,6 +66,9 @@ def compute_correspondences_for_image_pairs(
         Each input row can generate zero or many output entries depending on
         how many 3D samples are visible in both views.
     """
+
+    if max_items_to_store is not None and max_items_to_store <= 1:
+        raise ValueError("`max_items_to_store` must be greater than 1 or None.")
     if not os.path.isfile(pairs_txt_path):
         raise FileNotFoundError(f"pairs_txt_path not found: {pairs_txt_path}")
 
@@ -101,7 +106,7 @@ def compute_correspondences_for_image_pairs(
             raise ValueError(
                 f"Invalid range_indices ({start_idx}, {end_idx}) for {len(rows)} rows."
             )
-        rows = rows[start_idx : end_idx + 1]
+        rows = rows[start_idx: end_idx + 1]
     else:
         start_idx = end_idx = None
 
@@ -145,7 +150,7 @@ def compute_correspondences_for_image_pairs(
     try:
         base_offset = start_idx or 0
         for idx, (view1_path, view2_path, angular_rot) in enumerate(
-            tqdm(rows, desc="Processing image pairs")
+                tqdm(rows, desc="Processing image pairs")
         ):
             obj1, scene1, fname1 = _parse_rel_image_path(view1_path)
             obj2, scene2, fname2 = _parse_rel_image_path(view2_path)
@@ -179,7 +184,10 @@ def compute_correspondences_for_image_pairs(
                 (samples_visible_1, samples_visible_2)
             )
 
+            cnt = 0
             for (_, ((x1, y1), (x2, y2))) in intersected.items():
+                if max_items_to_store is not None and cnt >= max_items_to_store:
+                    break
                 output_records.append({
                     "view_1_image_path": view1_path,
                     "view_2_image_path": view2_path,
@@ -189,6 +197,7 @@ def compute_correspondences_for_image_pairs(
                     "view_2_corresp_x": int(x2),
                     "view_2_corresp_y": int(y2),
                 })
+                cnt += 1
 
             last_completed_index = base_offset + idx
 
