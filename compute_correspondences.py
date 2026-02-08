@@ -43,7 +43,7 @@ def compute_correspondences_for_image_pairs(
         navi_release_root: Root directory of the NAVI release.
         pairs_txt_path: Path to the .txt file listing image pairs and angular rotation.
         num_samples_per_scene: Number of 3D samples drawn per scene.
-        output_path: Path to the output .json file.
+        output_path: Path to the output dir where correspondences.json file is written. If `range_indices` is used, output is written under `output_path/range=<start_idx>_<end_idx>`.
         random_subsample_size: If provided, randomly samples this many rows from the txt file
             before processing.
         range_indices: Optional (start_idx, end_idx) inclusive range of rows (0-based, after
@@ -140,9 +140,9 @@ def compute_correspondences_for_image_pairs(
     last_completed_index = -1
 
     final_output_path = (
-        os.path.join(output_path, f"range={start_idx}_{end_idx}")
+        os.path.join(output_path, f"range={start_idx}_{end_idx}", "correspondences.json")
         if start_idx is not None and end_idx is not None
-        else output_path
+        else os.path.join(output_path, "correspondences.json")
     )
     output_dir = os.path.dirname(final_output_path) or "."
     error_file_path = os.path.join(output_dir, "error_file.txt")
